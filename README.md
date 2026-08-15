@@ -252,3 +252,13 @@ This template is provided **as-is** for educational purposes. Adjust as needed f
 Have questions? Open an **Issue** in this repository! 
 
 Good luck with Veeam! 🚀
+
+## Disclaimer!
+
+This solution is under active development and is provided for study and testing purposes only.
+
+It is an experimental version and may contain bugs, unexpected behavior, and security limitations. Do not use this project or any of its components in production environments.
+
+No warranty is provided. The maintainers are not responsible for any loss, damage, or other consequences that may arise from using this software.
+
+If you plan to evaluate or contribute, please review the source code carefully and raise issues or pull requests for any bugs, security concerns, or suggested improvements.
