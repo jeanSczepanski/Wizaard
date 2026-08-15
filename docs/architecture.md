@@ -1,37 +1,37 @@
-# Arquitetura Wizaard
+# Wizaard Architecture
 
-## Visão Geral
+## Overview
 
-Este documento descreve a arquitetura da aplicação Wizaard, que utiliza componentes AWS para gerenciar infraestrutura em nuvem.
+This document describes the architecture of the Wizaard application, which utilizes AWS components to manage cloud infrastructure.
 
-## Diagrama de Arquitetura
+## Architecture Diagram
 
-![Diagrama de Arquitetura Wizaard](./architecture-diagram.png)
+![Wizaard Architecture Diagram](./architecture-diagram.png)
 
-## Componentes
+## Components
 
 ### VeemServer
-- **InstanceRole**: Papel de instância para permissões
-- **InstanceProfile**: Perfil de instância
-- **VeemServer**: Servidor principal
+- **InstanceRole**: Instance role for permissions
+- **InstanceProfile**: Instance profile
+- **VeemServer**: Main server
 
 ### Endpoints
-- **S3GatewayEndpoint**: Endpoint para acesso ao S3
-- **SSMEndpoint**: Endpoint para Systems Manager
-- **SSMMessagesEndpoint**: Endpoint para mensagens do Systems Manager
-- **EC2MessagesEndpoint**: Endpoint para mensagens do EC2
+- **S3GatewayEndpoint**: Endpoint for S3 access
+- **SSMEndpoint**: Endpoint for Systems Manager
+- **SSMMessagesEndpoint**: Endpoint for Systems Manager messages
+- **EC2MessagesEndpoint**: Endpoint for EC2 messages
 
-### Rede
-- **PrivateSubnet**: Sub-rede privada contendo:
+### Network
+- **PrivateSubnet**: Private subnet containing:
   - PrivateSubnet
   - PrivateSubnetRouteTableAssociation
   - PrivateRouteTable
 - **VPC**: Virtual Private Cloud
 
-### Segurança
-- **InstanceSecurityGroup**: Grupo de segurança para instâncias
-- **EndpointSecurityGroup**: Grupo de segurança para endpoints
+### Security
+- **InstanceSecurityGroup**: Security group for instances
+- **EndpointSecurityGroup**: Security group for endpoints
 
 ---
 
-*Última atualização: 2026-08-15*
+*Last updated: 2026-08-15*
