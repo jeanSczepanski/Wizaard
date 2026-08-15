@@ -1,53 +1,53 @@
 # 🚀 Veeam Data Platform Premium v13 — AWS CloudFormation Template
 
-Deploy automático do **Veeam Data Platform Premium v13** em um **Windows Server 2025** na AWS com rede isolada (SSM only).
+Automated deployment of **Veeam Data Platform Premium v13** on **Windows Server 2025** in AWS with an isolated network (SSM only).
 
 ---
 
-## 📋 O que é este template?
+## 📋 What is this template?
 
-Um template CloudFormation **100% pronto para produção** que:
+A **production-ready** CloudFormation template that:
 
-✅ Cria uma **VPC privada isolada** (sem Internet Gateway, sem NAT)  
-✅ Configura **VPC Endpoints** para acesso SSM Session Manager  
-✅ Provisiona um **EC2 Windows Server 2025** com 2 discos:
-   - **C:** 120 GB (Sistema Operacional)
-   - **D:** 450 GB (Repositório Veeam)  
-✅ **Baixa automaticamente** ISO e license do Veeam do S3  
-✅ Aplica **IMDSv2 obrigatório** (proteção contra SSRF)  
-✅ Restringe egress a apenas S3 e endpoints de SSM  
-
----
-
-## 📦 Pré-requisitos
-
-Antes de começar, você precisa:
-
-1. **Conta AWS** com permissões para criar VPC, EC2, IAM, VPC Endpoints
-2. **AWS CLI v2** instalado ([guia aqui](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html))
-3. **Veeam ISO e License** já uploadados para um **S3 bucket** na sua região
-4. **Conhecer o Prefix List ID** do seu S3 na região (comando abaixo)
+✅ Creates an **isolated private VPC** (no Internet Gateway, no NAT)  
+✅ Configures **VPC Endpoints** for SSM Session Manager access  
+✅ Provisions an **EC2 Windows Server 2025** with 2 disks:
+   - **C:** 120 GB (Operating System)
+   - **D:** 450 GB (Veeam Repository)  
+✅ **Automatically downloads** Veeam ISO and license from S3  
+✅ Enforces **IMDSv2** (protection against SSRF)  
+✅ Restricts egress to only S3 and SSM endpoints  
 
 ---
 
-## 🔧 Passo a Passo
+## 📦 Prerequisites
 
-### 1️⃣ Prepare seus arquivos no S3
+Before you start, you need:
 
-Faça upload do **ISO** e **License** do Veeam para seu bucket S3:
+1. **AWS Account** with permissions to create VPC, EC2, IAM, VPC Endpoints
+2. **AWS CLI v2** installed ([guide here](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html))
+3. **Veeam ISO and License** already uploaded to an **S3 bucket** in your region
+4. **Know the Prefix List ID** of your S3 in the region (command below)
+
+---
+
+## 🔧 Step by Step
+
+### 1️⃣ Prepare Your Files in S3
+
+Upload the **ISO** and **License** files to your S3 bucket:
 
 ```bash
-# Exemplo (ajuste os caminhos)
+# Example (adjust paths)
 aws s3 cp VeeamDataPlatformPremium_v13.1.iso \
-  s3://seu-bucket/ISO-Veeam/ --region us-east-2
+  s3://your-bucket/ISO-Veeam/ --region us-east-2
 
 aws s3 cp veeam_license.lic \
-  s3://seu-bucket/ --region us-east-2
+  s3://your-bucket/ --region us-east-2
 ```
 
-### 2️⃣ Encontre o Prefix List ID do S3
+### 2️⃣ Find the S3 Prefix List ID
 
-Para sua região, execute:
+For your region, run:
 
 ```bash
 aws ec2 describe-prefix-lists \
@@ -57,7 +57,7 @@ aws ec2 describe-prefix-lists \
   --region [REGION]
 ```
 
-**Exemplo para us-east-2:**
+**Example for us-east-2:**
 ```bash
 aws ec2 describe-prefix-lists \
   --filters Name=prefix-list-name,Values=com.amazonaws.us-east-2.s3 \
@@ -66,32 +66,32 @@ aws ec2 describe-prefix-lists \
   --region us-east-2
 ```
 
-Você receberá algo como: `pl-12345678` — **guarde este valor!**
+You will receive something like: `pl-12345678` — **save this value!**
 
-### 3️⃣ Baixe o Template
+### 3️⃣ Download the Template
 
-Clone este repositório ou copie o arquivo `VeeamWizzard-V1-Template.yaml`
+Clone this repository or copy the file `VeeamWizzard-V1-Template.yaml`
 
-### 4️⃣ Preencha os Parâmetros
+### 4️⃣ Fill in the Parameters
 
-Abra `VeeamWizzard-V1-Template.yaml` e substitua:
+Open `VeeamWizzard-V1-Template.yaml` and replace:
 
-| Placeholder | Exemplo | Descrição |
+| Placeholder | Example | Description |
 |---|---|---|
-| `[ENTER_YOUR_BUCKET_NAME]` | `meu-bucket-veeam` | Nome do seu bucket S3 |
-| `[ENTER_YOUR_S3_ISO_PATH_HERE]` | `s3://meu-bucket-veeam/ISO-Veeam/VeeamDataPlatformPremium_v13.1.iso` | Caminho completo do ISO no S3 |
-| `[ENTER_YOUR_S3_LICENSE_PATH_HERE]` | `s3://meu-bucket-veeam/veeam_license.lic` | Caminho completo da license no S3 |
-| `[ENTER_YOUR_S3_PREFIX_LIST_ID_HERE]` | `pl-12345678` | Prefix List ID que você encontrou no passo 2 |
+| `[ENTER_YOUR_BUCKET_NAME]` | `my-veeam-bucket` | Name of your S3 bucket |
+| `[ENTER_YOUR_S3_ISO_PATH_HERE]` | `s3://my-veeam-bucket/ISO-Veeam/VeeamDataPlatformPremium_v13.1.iso` | Full path of ISO in S3 |
+| `[ENTER_YOUR_S3_LICENSE_PATH_HERE]` | `s3://my-veeam-bucket/veeam_license.lic` | Full path of license in S3 |
+| `[ENTER_YOUR_S3_PREFIX_LIST_ID_HERE]` | `pl-12345678` | Prefix List ID found in step 2 |
 
-### 5️⃣ Deploy via AWS Console (Mais Fácil)
+### 5️⃣ Deploy via AWS Console (Easier)
 
-1. Vá para [AWS CloudFormation Console](https://console.aws.amazon.com/cloudformation)
-2. Clique em **Create Stack** → **With new resources**
-3. Cole o conteúdo do arquivo YAML na seção **Template**
-4. Clique **Next** e preencha os parâmetros
-5. Revise as permissões e clique **Create Stack**
+1. Go to [AWS CloudFormation Console](https://console.aws.amazon.com/cloudformation)
+2. Click **Create Stack** → **With new resources**
+3. Paste the YAML file content in the **Template** section
+4. Click **Next** and fill in the parameters
+5. Review permissions and click **Create Stack**
 
-### 6️⃣ Deploy via CLI (Avançado)
+### 6️⃣ Deploy via CLI (Advanced)
 
 ```bash
 aws cloudformation create-stack \
@@ -100,9 +100,9 @@ aws cloudformation create-stack \
   --parameters \
       ParameterKey=EnvironmentName,ParameterValue=veeam-prod \
       ParameterKey=AWSRegion,ParameterValue=us-east-2 \
-      ParameterKey=S3BucketName,ParameterValue=meu-bucket-veeam \
-      ParameterKey=VeeamISOUrl,ParameterValue=s3://meu-bucket-veeam/ISO-Veeam/VeeamDataPlatformPremium_v13.1.iso \
-      ParameterKey=VeeamLicenseUrl,ParameterValue=s3://meu-bucket-veeam/veeam_license.lic \
+      ParameterKey=S3BucketName,ParameterValue=my-veeam-bucket \
+      ParameterKey=VeeamISOUrl,ParameterValue=s3://my-veeam-bucket/ISO-Veeam/VeeamDataPlatformPremium_v13.1.iso \
+      ParameterKey=VeeamLicenseUrl,ParameterValue=s3://my-veeam-bucket/veeam_license.lic \
       ParameterKey=S3PrefixListId,ParameterValue=pl-12345678 \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-east-2
@@ -110,12 +110,12 @@ aws cloudformation create-stack \
 
 ---
 
-## ⏱️ Tempo de Deploy
+## ⏱️ Deployment Time
 
-Geralmente leva **5-10 minutos**. Você pode acompanhar:
+Usually takes **5-10 minutes**. You can monitor via:
 
-- **Via Console:** CloudFormation → Stacks → Seu Stack → Events
-- **Via CLI:**
+- **Console:** CloudFormation → Stacks → Your Stack → Events
+- **CLI:**
 ```bash
 aws cloudformation describe-stacks \
   --stack-name veeam-prod-stack \
@@ -125,27 +125,27 @@ aws cloudformation describe-stacks \
 
 ---
 
-## 🖥️ Acessar a Instância
+## 🖥️ Access the Instance
 
-Após o deploy, use **AWS Systems Manager Session Manager** (sem SSH, sem RDP aberto):
+After deployment, use **AWS Systems Manager Session Manager** (no SSH, no RDP open):
 
-### Opção 1: Via Console
-1. Vá para [EC2 Console](https://console.aws.amazon.com/ec2)
-2. Selecione a instância `veeam-prod-server`
-3. Clique em **Connect** → **Session Manager**
+### Option 1: Via Console
+1. Go to [EC2 Console](https://console.aws.amazon.com/ec2)
+2. Select the instance `veeam-prod-server`
+3. Click **Connect** → **Session Manager**
 
-### Opção 2: Via CLI
+### Option 2: Via CLI
 ```bash
 aws ssm start-session --target i-xxxxxxxxx --region us-east-2
 ```
 
-(Substitua `i-xxxxxxxxx` pelo Instance ID, disponível nos Outputs do Stack)
+(Replace `i-xxxxxxxxx` with the Instance ID from Stack Outputs)
 
 ---
 
-## 📂 Arquivos no Servidor
+## 📂 Files on the Server
 
-Após o bootstrap completar, você terá:
+After bootstrap completes, you will have:
 
 ```
 D:\Veeam\
@@ -157,24 +157,24 @@ D:\Veeam\
     └── userdata.log
 ```
 
-**Desktop:** Um arquivo `VEEAM_INSTALL_README.txt` com instruções
+**Desktop:** A `VEEAM_INSTALL_README.txt` file with instructions
 
 ---
 
-## 🔐 Segurança
+## 🔐 Security
 
-✅ **IMDSv2** obrigatório (proteção contra SSRF)  
-✅ **Sem acesso à internet** (isolado em subnet privada)  
-✅ **Egress restrito** apenas a S3 e VPC Endpoints  
-✅ **Sem portas abertas** (acesso apenas via SSM)  
-✅ **Discos criptografados** (EBS encryption habilitada)  
-✅ **Sem Security Group inbound** (zero exposição)  
+✅ **IMDSv2** enforced (SSRF protection)  
+✅ **No internet access** (isolated in private subnet)  
+✅ **Restricted egress** only to S3 and VPC Endpoints  
+✅ **No open ports** (access only via SSM)  
+✅ **Encrypted disks** (EBS encryption enabled)  
+✅ **No Security Group inbound rules** (zero exposure)  
 
 ---
 
-## 📊 Outputs do Stack
+## 📊 Stack Outputs
 
-Após deploy, você receberá:
+After deployment, you will receive:
 
 ```
 VpcId: vpc-xxxxx
@@ -188,9 +188,9 @@ LicensePath: D:\Veeam\License\veeam_license.lic
 
 ---
 
-## ❌ Deletar o Stack (Cleanup)
+## ❌ Delete the Stack (Cleanup)
 
-Para remover tudo e evitar custos:
+To remove everything and avoid costs:
 
 ```bash
 aws cloudformation delete-stack \
@@ -202,37 +202,37 @@ aws cloudformation delete-stack \
 
 ## 🐛 Troubleshooting
 
-### **Erro: "S3BucketName is required"**
-Você deixou um placeholder `[ENTER_YOUR_...]` sem substituir. Verifique todos os parâmetros.
+### **Error: "S3BucketName is required"**
+You left a placeholder `[ENTER_YOUR_...]` without replacing. Check all parameters.
 
-### **Erro: "Access Denied" ao baixar ISO do S3**
-- Verifique se a IAM Role tem permissão `s3:GetObject` no bucket
-- Confirme o caminho S3 está correto
+### **Error: "Access Denied" when downloading ISO from S3**
+- Verify that the IAM Role has `s3:GetObject` permission on the bucket
+- Confirm the S3 path is correct
 
-### **Disco D: não aparece na instância**
-- Acesse via SSM e verifique o log: `D:\Veeam\Logs\userdata.log`
-- Pode levar alguns minutos para o disco ser reconhecido
+### **D: drive not appearing in the instance**
+- Access via SSM and check the log: `D:\Veeam\Logs\userdata.log`
+- The disk may take a few minutes to be recognized
 
-### **VPC Endpoints não conectam**
-- Confirme que `S3PrefixListId` está correto
-- Verifique a Security Group do endpoint permite HTTPS (porta 443) da VPC CIDR
-
----
-
-## 💡 Customizações Comuns
-
-### Mudar o tamanho da instância
-Edite o parâmetro `InstanceType` para `m5.2xlarge`, `c5.xlarge`, etc.
-
-### Mudar o tamanho dos discos
-No `BlockDeviceMappings`, altere `VolumeSize` (em GB)
-
-### Mudar a região
-Atualize `AWSRegion` e `S3PrefixListId` conforme sua região
+### **VPC Endpoints not connecting**
+- Confirm that `S3PrefixListId` is correct
+- Check that the endpoint Security Group allows HTTPS (port 443) from VPC CIDR
 
 ---
 
-## 📚 Documentação Referência
+## 💡 Common Customizations
+
+### Change the instance size
+Edit the `InstanceType` parameter to `m5.2xlarge`, `c5.xlarge`, etc.
+
+### Change disk sizes
+In `BlockDeviceMappings`, change `VolumeSize` (in GB)
+
+### Change the region
+Update `AWSRegion` and `S3PrefixListId` according to your region
+
+---
+
+## 📚 Reference Documentation
 
 - [AWS CloudFormation](https://docs.aws.amazon.com/cloudformation/)
 - [Veeam Data Platform](https://www.veeam.com/data-platform.html)
@@ -241,14 +241,14 @@ Atualize `AWSRegion` e `S3PrefixListId` conforme sua região
 
 ---
 
-## 📝 Licença
+## 📝 License
 
-Este template é fornecido **as-is** para fins educacionais. Ajuste conforme necessário para sua infraestrutura.
+This template is provided **as-is** for educational purposes. Adjust as needed for your infrastructure.
 
 ---
 
-## 🤝 Suporte
+## 🤝 Support
 
-Dúvidas? Abra uma **Issue** neste repositório! 
+Have questions? Open an **Issue** in this repository! 
 
-Boa sorte com o Veeam! 🚀
+Good luck with Veeam! 🚀
