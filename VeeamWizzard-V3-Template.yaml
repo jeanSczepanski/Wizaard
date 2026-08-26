@@ -20,7 +20,7 @@
 # -----------------------------------------------------------------------------
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  Veeam Data Platform Premium v13 on Windows Server 2025, 100% isolated
+  Veeam Data Platform Premium v13.1 on Windows Server 2025, 100% isolated
   network via SSM (no IGW/NAT). C: 120GB (OS), D: 450GB (repository).
   Replace [ENTER_YOUR_*] placeholders before deploying. See inline comments
   for the S3 prefix list lookup command and full security changelog.
@@ -519,7 +519,7 @@ Resources:
         - Key: OS
           Value: Windows Server 2025
         - Key: Application
-          Value: Veeam Data Platform Premium v13
+          Value: Veeam Data Platform Premium v13.1
 
       # ------------------------------------------------------------------
       # UserData — PowerShell bootstrap (runs once at first boot)
@@ -663,7 +663,7 @@ Resources:
               $rdm = "C:\Users\Public\Desktop\VEEAM_INSTALL_README.txt"
               $sep = "=" * 60
               Set-Content  -Path $rdm -Encoding UTF8 -Value $sep
-              Add-Content  -Path $rdm -Encoding UTF8 -Value " Veeam Data Platform Premium v13 - Installation Guide"
+              Add-Content  -Path $rdm -Encoding UTF8 -Value " Veeam Data Platform Premium v13.1 - Installation Guide"
               Add-Content  -Path $rdm -Encoding UTF8 -Value $sep
               Add-Content  -Path $rdm -Encoding UTF8 -Value ""
               Add-Content  -Path $rdm -Encoding UTF8 -Value "Files ready for installation:"
