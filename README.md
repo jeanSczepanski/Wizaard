@@ -1,4 +1,4 @@
-# 🚀 Veeam Data Platform Premium v13.1 — AWS CloudFormation Template
+# 🚀 Veeam Data Platform 13.1 — AWS CloudFormation Template
 
 Automated deployment of **Veeam Data Platform Premium v13** on **Windows Server 2025** in AWS with an isolated network (SSM only).
 
