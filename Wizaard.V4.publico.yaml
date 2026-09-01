@@ -1,0 +1,642 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Veeam Data Platform Premium v13 - Windows Server 2025 - Public Template v4.0
+  100 percent isolated network (SSM only, no internet gateway, no NAT).
+  C: 120 GB (OS) | D: 450 GB (Veeam repository)
+  
+  Features:
+  - Hardened Security Groups (SG-to-SG, restricted egress)
+  - VPC Endpoint policies (account-scoped, bucket-scoped)
+  - IMDSv2 enforced (SSRF mitigation)
+  - Separable IAM policies (installer vs. repository)
+  - Optional S3 repository with KMS support
+  - Multi-region support
+  - Fully parameterized for reusability
+
+Parameters:
+
+  EnvironmentName:
+    Type: String
+    Default: veeam-prod
+    Description: Prefix applied to every resource name and tag
+    AllowedPattern: "^[a-z0-9-]{1,32}$"
+
+  AWSRegion:
+    Type: String
+    Default: us-east-2
+    Description: AWS Region for resource deployment
+    AllowedValues:
+      - us-east-1
+      - us-east-2
+      - us-west-1
+      - us-west-2
+      - eu-west-1
+      - eu-central-1
+      - ap-southeast-1
+      - ap-southeast-2
+
+  VpcCIDR:
+    Type: String
+    Default: 10.10.0.0/16
+    Description: CIDR block for the VPC
+
+  PrivateSubnetCIDR:
+    Type: String
+    Default: 10.10.1.0/24
+    Description: CIDR block for the private subnet
+
+  InstanceType:
+    Type: String
+    Default: m5.xlarge
+    Description: EC2 instance type for Veeam server
+    AllowedValues:
+      - m5.large
+      - m5.xlarge
+      - m5.2xlarge
+      - m6i.xlarge
+      - m6i.2xlarge
+      - c5.xlarge
+      - c5.2xlarge
+
+  WindowsAMI:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-windows-latest/Windows_Server-2025-English-Full-Base
+    Description: Latest Windows Server 2025 Full AMI (auto-resolved from SSM Parameter Store)
+
+  VeeamISOUrl:
+    Type: String
+    NoEcho: false
+    Description: S3 path to Veeam ISO file. Format s3://bucket-name/path/to/file.iso
+
+  VeeamLicenseUrl:
+    Type: String
+    NoEcho: true
+    Description: S3 path to Veeam license file. Format s3://bucket-name/path/to/file.lic
+
+  S3BucketName:
+    Type: String
+    Description: S3 bucket name containing Veeam ISO and license files
+
+  S3PrefixListId:
+    Type: String
+    Description: |
+      Managed prefix list ID for S3 in your region.
+      Find it with - aws ec2 describe-prefix-lists --filters Name=prefix-list-name,Values=com.amazonaws.REGION.s3 --query "PrefixLists[0].PrefixListId" --output text --region REGION
+      Example - pl-12345678
+
+  VeeamRepositoryBucketName:
+    Type: String
+    Default: ""
+    Description: OPTIONAL - S3 bucket name for Veeam backup repository. Leave blank if not needed.
+
+  VeeamRepositoryKmsKeyArn:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: |
+      OPTIONAL - ARN of KMS key for repository bucket encryption.
+      Example - arn:aws:kms:us-east-2:123456789012:key/12345678-1234-1234-1234-123456789012
+      Leave blank if using SSE-S3 or if VeeamRepositoryBucketName is blank.
+
+Conditions:
+  HasRepositoryBucket: !Not [!Equals [!Ref VeeamRepositoryBucketName, ""]]
+  HasRepositoryKmsKey: !Not [!Equals [!Ref VeeamRepositoryKmsKeyArn, ""]]
+
+Resources:
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-vpc
+        - Key: Application
+          Value: VeeamDataPlatform
+
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnetCIDR
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-subnet
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-rt
+
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+
+  SSMEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub com.amazonaws.${AWSRegion}.ssm
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowSameAccountOnly
+            Effect: Allow
+            Principal: "*"
+            Action: "*"
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:PrincipalAccount: !Ref AWS::AccountId
+
+  SSMMessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub com.amazonaws.${AWSRegion}.ssmmessages
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowSameAccountOnly
+            Effect: Allow
+            Principal: "*"
+            Action: "*"
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:PrincipalAccount: !Ref AWS::AccountId
+
+  EC2MessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub com.amazonaws.${AWSRegion}.ec2messages
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowSameAccountOnly
+            Effect: Allow
+            Principal: "*"
+            Action: "*"
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:PrincipalAccount: !Ref AWS::AccountId
+
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub com.amazonaws.${AWSRegion}.s3
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref PrivateRouteTable
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowInstallerBucket
+            Effect: Allow
+            Principal: "*"
+            Action:
+              - s3:GetObject
+              - s3:GetBucketLocation
+              - s3:ListBucket
+            Resource:
+              - !Sub arn:aws:s3:::${S3BucketName}
+              - !Sub arn:aws:s3:::${S3BucketName}/*
+          - Sid: AllowAwsCliInstallerBucket
+            Effect: Allow
+            Principal: "*"
+            Action:
+              - s3:GetObject
+            Resource:
+              - arn:aws:s3:::aws-cli
+              - arn:aws:s3:::aws-cli/*
+          - !If
+            - HasRepositoryBucket
+            - Sid: AllowRepositoryBucket
+              Effect: Allow
+              Principal: "*"
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+                - s3:ListBucket
+                - s3:DeleteObject
+              Resource:
+                - !Sub arn:aws:s3:::${VeeamRepositoryBucketName}
+                - !Sub arn:aws:s3:::${VeeamRepositoryBucketName}/*
+            - !Ref AWS::NoValue
+
+  EndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTPS inbound from VeeamServer SG only
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 127.0.0.1/32
+          Description: Placeholder to remove default outbound rule
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-endpoint-sg
+
+  EndpointSecurityGroupIngressFromInstance:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref EndpointSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref InstanceSecurityGroup
+      Description: HTTPS from Veeam Server security group
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Veeam server security group with restricted egress
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 127.0.0.1/32
+          Description: Placeholder to remove default outbound rule
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-instance-sg
+
+  InstanceSecurityGroupEgressEndpoints:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref InstanceSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      DestinationSecurityGroupId: !Ref EndpointSecurityGroup
+      Description: HTTPS to VPC endpoints
+
+  InstanceSecurityGroupEgressS3:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref InstanceSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      DestinationPrefixListId: !Ref S3PrefixListId
+      Description: HTTPS to S3 Gateway Endpoint
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-ec2-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: VeeamInstallerReadAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ReadInstallerFiles
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:HeadObject
+                Resource:
+                  - !Sub arn:aws:s3:::${S3BucketName}/*
+        - !If
+          - HasRepositoryBucket
+          - PolicyName: VeeamRepositoryAccess
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - !If
+                  - HasRepositoryKmsKey
+                  - Sid: RepositoryKmsAccess
+                    Effect: Allow
+                    Action:
+                      - kms:GenerateDataKey
+                      - kms:Decrypt
+                    Resource:
+                      - !Ref VeeamRepositoryKmsKeyArn
+                  - !Ref AWS::NoValue
+                - Sid: RepositoryObjectAccess
+                  Effect: Allow
+                  Action:
+                    - s3:PutObject
+                    - s3:GetObject
+                    - s3:DeleteObject
+                  Resource:
+                    - !Sub arn:aws:s3:::${VeeamRepositoryBucketName}/*
+                - Sid: RepositoryListAccess
+                  Effect: Allow
+                  Action:
+                    - s3:ListBucket
+                  Resource:
+                    - !Sub arn:aws:s3:::${VeeamRepositoryBucketName}
+          - !Ref AWS::NoValue
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub ${EnvironmentName}-ec2-profile
+      Roles:
+        - !Ref InstanceRole
+
+  VeeamServer:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref WindowsAMI
+      InstanceType: !Ref InstanceType
+      SubnetId: !Ref PrivateSubnet
+      IamInstanceProfile: !Ref InstanceProfile
+      SecurityGroupIds:
+        - !Ref InstanceSecurityGroup
+
+      MetadataOptions:
+        HttpTokens: required
+        HttpPutResponseHopLimit: 1
+        HttpEndpoint: enabled
+
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 120
+            VolumeType: gp3
+            Iops: 3000
+            Throughput: 125
+            DeleteOnTermination: true
+            Encrypted: true
+            Tags:
+              - Key: Name
+                Value: !Sub ${EnvironmentName}-root-volume
+
+        - DeviceName: /dev/xvdf
+          Ebs:
+            VolumeSize: 450
+            VolumeType: gp3
+            Iops: 3000
+            Throughput: 125
+            DeleteOnTermination: true
+            Encrypted: true
+            Tags:
+              - Key: Name
+                Value: !Sub ${EnvironmentName}-data-volume
+
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-server
+        - Key: OS
+          Value: Windows Server 2025
+        - Key: Application
+          Value: Veeam Data Platform Premium v13
+        - Key: ManagedBy
+          Value: CloudFormation
+
+      UserData: !Base64
+        Fn::Join:
+          - ''
+          - - |
+              <powershell>
+              Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
+              $script:log = "C:\Windows\Temp\userdata.log"
+              function Write-Log {
+                param([string]$m)
+                $ts = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+                "$ts  $m" | Tee-Object -FilePath $script:log -Append
+              }
+              Write-Log "=== Veeam Bootstrap Started ==="
+
+              Write-Log "Step 1: Releasing D: from CD-ROM if assigned..."
+              $cdVol = Get-WmiObject -Class Win32_Volume -Filter "DriveType=5 AND DriveLetter='D:'" -ErrorAction SilentlyContinue
+              if ($cdVol) {
+                $cdVol.DriveLetter = $null
+                $cdVol.Put() | Out-Null
+                Write-Log "D: released from CD-ROM"
+              }
+
+              Write-Log "Step 2: Waiting for 450-GB EBS disk..."
+              $disk = $null
+              for ($i = 0; $i -lt 36; $i++) {
+                $disk = Get-Disk | Where-Object { $_.Size -ge 400GB } | Select-Object -First 1
+                if ($disk) { break }
+                Write-Log "Waiting for disk... attempt $($i+1)/36"
+                Start-Sleep -Seconds 5
+              }
+
+              if (-not $disk) {
+                Write-Log "ERROR: 450-GB disk not found after 180s. Aborting."
+              } else {
+                Write-Log "Found disk $($disk.Number) - $([math]::Round($disk.Size/1GB,0)) GB"
+
+                $dpScript = @(
+                  "select disk $($disk.Number)",
+                  "clean",
+                  "convert gpt",
+                  "create partition primary",
+                  "assign letter=D",
+                  "format fs=ntfs label=VeeamData quick",
+                  "exit"
+                )
+                $dpFile = "$env:TEMP\veeam-diskpart.txt"
+                $dpScript | Set-Content -Path $dpFile -Encoding ASCII
+                $dpResult = & diskpart /s $dpFile 2>&1
+                Write-Log "diskpart exit code: $LASTEXITCODE"
+                $dpResult | ForEach-Object { Write-Log "  $_" }
+
+                Start-Sleep -Seconds 5
+                if (Test-Path "D:\") {
+                  Write-Log "D: drive confirmed ready"
+                } else {
+                  Write-Log "ERROR: D: drive not accessible"
+                }
+              }
+
+              Write-Log "Step 3: Creating staging directories..."
+              New-Item -ItemType Directory -Force -Path "D:\Veeam\ISO"     | Out-Null
+              New-Item -ItemType Directory -Force -Path "D:\Veeam\License" | Out-Null
+              New-Item -ItemType Directory -Force -Path "D:\Veeam\Logs"    | Out-Null
+
+              $mainLog = "D:\Veeam\Logs\userdata.log"
+              Copy-Item -Path $script:log -Destination $mainLog -ErrorAction SilentlyContinue
+              $script:log = $mainLog
+              Write-Log "Continuing from D:\Veeam\Logs\userdata.log"
+
+              Write-Log "Step 4: Installing AWS CLI v2..."
+              $awsCli = "C:\Program Files\Amazon\AWSCLIV2\aws.exe"
+              if (-not (Test-Path $awsCli)) {
+                $msiPath = "$env:TEMP\AWSCLIV2.msi"
+                try {
+                  (New-Object System.Net.WebClient).DownloadFile(
+                    "https://s3.amazonaws.com/aws-cli/AWSCLIV2.msi", $msiPath)
+                  Write-Log "AWS CLI MSI downloaded"
+                  $exit = (Start-Process msiexec.exe `
+                    -ArgumentList "/i `"$msiPath`" /qn /norestart" `
+                    -Wait -PassThru).ExitCode
+                  if ($exit -ne 0) { throw "msiexec exit code $exit" }
+                  Write-Log "AWS CLI v2 installed"
+                } catch {
+                  Write-Log "ERROR installing AWS CLI: $_"
+                  exit 1
+                }
+              } else {
+                Write-Log "AWS CLI already installed"
+              }
+
+              Write-Log "Step 5: Downloading installer files from S3..."
+            - |2
+                            $isoS3 = '
+            - !Ref VeeamISOUrl
+            - |2
+                            '
+                            $licS3 = '
+            - !Ref VeeamLicenseUrl
+            - |2
+                            '
+            - |
+              $isoDest = "D:\Veeam\ISO\VeeamDataPlatformPremium_v13.1.iso"
+              $licDest = "D:\Veeam\License\veeam_license.lic"
+              $region  = (Invoke-RestMethod -Uri "http://169.254.169.254/latest/meta-data/placement/region" -UseBasicParsing)
+              Write-Log "Region: $region"
+              Write-Log "ISO URL: $isoS3"
+              Write-Log "LIC URL: $licS3"
+
+              Write-Log "Downloading ISO..."
+              $r = & $awsCli s3 cp $isoS3 $isoDest --region $region 2>&1
+              if ($LASTEXITCODE -ne 0) {
+                Write-Log "ERROR downloading ISO: $r"
+              } else {
+                Write-Log "ISO downloaded: $isoDest"
+              }
+
+              Write-Log "Downloading license..."
+              $r = & $awsCli s3 cp $licS3 $licDest --region $region 2>&1
+              if ($LASTEXITCODE -ne 0) {
+                Write-Log "ERROR downloading license: $r"
+              } else {
+                Write-Log "License downloaded: $licDest"
+              }
+
+              Write-Log "Step 6: Creating installation guide..."
+              $rdm = "C:\Users\Public\Desktop\VEEAM_INSTALL_README.txt"
+              $sep = "=" * 70
+              Set-Content  -Path $rdm -Encoding UTF8 -Value $sep
+              Add-Content  -Path $rdm -Encoding UTF8 -Value " Veeam Data Platform Premium v13.1 - Installation Guide"
+              Add-Content  -Path $rdm -Encoding UTF8 -Value $sep
+              Add-Content  -Path $rdm -Encoding UTF8 -Value ""
+              Add-Content  -Path $rdm -Encoding UTF8 -Value "Installer files ready:"
+              Add-Content  -Path $rdm -Encoding UTF8 -Value "  ISO     -> D:\Veeam\ISO\VeeamDataPlatformPremium_v13.1.iso"
+              Add-Content  -Path $rdm -Encoding UTF8 -Value "  License -> D:\Veeam\License\veeam_license.lic"
+              Add-Content  -Path $rdm -Encoding UTF8 -Value ""
+              Add-Content  -Path $rdm -Encoding UTF8 -Value "Installation steps:"
+              Add-Content  -Path $rdm -Encoding UTF8 -Value "  1. Mount the ISO (right-click > Mount)"
+              Add-Content  -Path $rdm -Encoding UTF8 -Value "  2. Run Setup.exe from the mounted drive"
+              Add-Content  -Path $rdm -Encoding UTF8 -Value "  3. Select the .lic file when prompted for license"
+              Add-Content  -Path $rdm -Encoding UTF8 -Value "  4. Configure backup repository:"
+              Add-Content  -Path $rdm -Encoding UTF8 -Value "     Path: D:\VeeamBackup"
+              Add-Content  -Path $rdm -Encoding UTF8 -Value "     Available space: 450 GB"
+              Add-Content  -Path $rdm -Encoding UTF8 -Value ""
+              Add-Content  -Path $rdm -Encoding UTF8 -Value "For troubleshooting:"
+              Add-Content  -Path $rdm -Encoding UTF8 -Value "  Bootstrap log -> D:\Veeam\Logs\userdata.log"
+              Add-Content  -Path $rdm -Encoding UTF8 -Value ""
+              Add-Content  -Path $rdm -Encoding UTF8 -Value "For remote access:"
+              Add-Content  -Path $rdm -Encoding UTF8 -Value "  aws ssm start-session --target INSTANCE_ID --region REGION"
+              Add-Content  -Path $rdm -Encoding UTF8 -Value $sep
+
+              Write-Log "=== Veeam Bootstrap Complete ==="
+              </powershell>
+
+Outputs:
+
+  VpcId:
+    Description: VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: !Sub ${EnvironmentName}-VpcId
+
+  PrivateSubnetId:
+    Description: Private Subnet ID
+    Value: !Ref PrivateSubnet
+    Export:
+      Name: !Sub ${EnvironmentName}-PrivateSubnetId
+
+  InstanceId:
+    Description: Veeam Server EC2 Instance ID
+    Value: !Ref VeeamServer
+    Export:
+      Name: !Sub ${EnvironmentName}-InstanceId
+
+  InstancePrivateIP:
+    Description: Private IP address of the Veeam server
+    Value: !GetAtt VeeamServer.PrivateIp
+
+  SSMConnectCommand:
+    Description: AWS CLI command to connect to instance via Session Manager
+    Value: !Sub aws ssm start-session --target ${VeeamServer} --region ${AWSRegion}
+
+  ISOPath:
+    Description: ISO file location on server after bootstrap
+    Value: D:\Veeam\ISO\VeeamDataPlatformPremium_v13.1.iso
+
+  LicensePath:
+    Description: License file location on server after bootstrap
+    Value: D:\Veeam\License\veeam_license.lic
+
+  BootstrapLogPath:
+    Description: Path to bootstrap log for troubleshooting
+    Value: D:\Veeam\Logs\userdata.log
+
+  InstallationGuidePath:
+    Description: Path to installation guide on desktop
+    Value: C:\Users\Public\Desktop\VEEAM_INSTALL_README.txt
+
+  RepositoryAccessEnabled:
+    Description: Whether optional backup repository IAM policy was added
+    Value: !If [HasRepositoryBucket, "true", "false"]
+
+  RepositoryKmsEnabled:
+    Description: Whether KMS encryption support was added
+    Value: !If [HasRepositoryKmsKey, "true", "false"]
+
+  VPCEndpointsStatus:
+    Description: VPC Endpoints deployed for isolated network access
+    Value: "SSM, SSMMessages, EC2Messages, S3 Gateway"
+
+  SecurityGroupStrategy:
+    Description: Security group configuration
+    Value: "SG-to-SG isolation with restricted egress to endpoints and S3 only"
+
+  IMDSStatus:
+    Description: Instance Metadata Service configuration
+    Value: "IMDSv2 enforced - SSRF mitigation enabled"
