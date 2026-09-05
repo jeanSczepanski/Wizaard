@@ -3,6 +3,7 @@
 Automated deployment of **Veeam Data Platform Premium v13** on **Windows Server 2025** in AWS with an isolated network (SSM only).
 
 ---
+<img width="1536" height="1024" alt="Overall architecture" src="https://github.com/user-attachments/assets/27ab3f6f-e1bb-4a6f-a971-e501c1d2973d" />
 
 ## 📋 What is this template?
 
