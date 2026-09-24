@@ -16,10 +16,7 @@ A **production-ready** CloudFormation template that:
 ✅ Restricts egress to only S3 and SSM endpoints  
 
 ---
-
----
 <img width="1536" height="1024" alt="Overall architecture" src="https://github.com/user-attachments/assets/27ab3f6f-e1bb-4a6f-a971-e501c1d2973d" />
-
 
 
 ## 📦 Prerequisites
