@@ -1,0 +1,550 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Customer-deployed AWS Budgets for monitoring a Veeam Backup for AWS environment.
+  This template creates notifications only; it does not create Budget Actions.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Budget naming and cost scope
+        Parameters:
+          - BudgetNamePrefix
+          - MonthlyLimitUsd
+          - CostAllocationTagKey
+          - CostAllocationTagValue
+          - BackupAccountId
+          - BillingViewArn
+      - Label:
+          default: Notifications
+        Parameters:
+          - AlertEmail
+          - ExistingSnsTopicArn
+          - ForecastAlertPercent
+          - ActualAlertPercentWarning
+          - ActualAlertPercentCritical
+      - Label:
+          default: Optional component budgets
+        Parameters:
+          - CreateComponentBudgets
+          - ComputeMonthlyLimitUsd
+          - StorageMonthlyLimitUsd
+          - SnapshotsMonthlyLimitUsd
+          - NetworkMonthlyLimitUsd
+    ParameterLabels:
+      BudgetNamePrefix:
+        default: Budget name prefix
+      MonthlyLimitUsd:
+        default: Total monthly limit (USD)
+      CostAllocationTagKey:
+        default: Cost allocation tag key
+      CostAllocationTagValue:
+        default: Cost allocation tag value
+      BackupAccountId:
+        default: Backup account ID (optional)
+      BillingViewArn:
+        default: Billing View ARN (optional)
+      AlertEmail:
+        default: Alert email address
+      ExistingSnsTopicArn:
+        default: Existing SNS topic ARN (optional)
+      CreateComponentBudgets:
+        default: Create component budgets
+
+Parameters:
+  BudgetNamePrefix:
+    Type: String
+    Default: vbr-finops
+    MinLength: 1
+    MaxLength: 60
+    Description: Prefix used to build the names of all budgets and the created SNS topic.
+  MonthlyLimitUsd:
+    Type: Number
+    MinValue: 0.01
+    Description: Monthly limit in USD for the total-by-tag and optional backup-account budgets.
+  CostAllocationTagKey:
+    Type: String
+    Default: workload
+    MinLength: 1
+    Description: Activated user-defined cost allocation tag key used to filter costs.
+  CostAllocationTagValue:
+    Type: String
+    Default: veeam-backup
+    MinLength: 1
+    Description: Cost allocation tag value used to filter costs.
+  BackupAccountId:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[0-9]{12}$'
+    Description: Optional 12-digit AWS account ID; creates a LinkedAccount budget when provided.
+  AlertEmail:
+    Type: String
+    AllowedPattern: '^[^\s@]+@[^\s@]+\.[^\s@]+$'
+    ConstraintDescription: Enter a valid email address.
+    Description: Email subscriber for all budget notifications.
+  ExistingSnsTopicArn:
+    Type: String
+    Default: ''
+    Description: Optional SNS topic ARN. If omitted, this stack creates a topic and its Budgets publish policy.
+  ForecastAlertPercent:
+    Type: Number
+    Default: 80
+    MinValue: 1
+    MaxValue: 100
+    Description: Forecasted spend notification threshold as a percentage of the budget.
+  ActualAlertPercentWarning:
+    Type: Number
+    Default: 90
+    MinValue: 1
+    MaxValue: 100
+    Description: First actual spend notification threshold as a percentage of the budget.
+  ActualAlertPercentCritical:
+    Type: Number
+    Default: 100
+    MinValue: 1
+    MaxValue: 100
+    Description: Second actual spend notification threshold as a percentage of the budget.
+  BillingViewArn:
+    Type: String
+    Default: ''
+    Description: Optional Cost Explorer Billing View ARN to apply to every created budget.
+  CreateComponentBudgets:
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: Set to true to create the Compute, Storage, Snapshots, and Network budgets with positive limits.
+  ComputeMonthlyLimitUsd:
+    Type: Number
+    Default: 0
+    MinValue: 0
+    Description: Component budget limit in USD. Set to a positive amount when component budgets are enabled; zero skips this budget.
+  StorageMonthlyLimitUsd:
+    Type: Number
+    Default: 0
+    MinValue: 0
+    Description: Component budget limit in USD. Set to a positive amount when component budgets are enabled; zero skips this budget.
+  SnapshotsMonthlyLimitUsd:
+    Type: Number
+    Default: 0
+    MinValue: 0
+    Description: Component budget limit in USD. Set to a positive amount when component budgets are enabled; zero skips this budget.
+  NetworkMonthlyLimitUsd:
+    Type: Number
+    Default: 0
+    MinValue: 0
+    Description: Component budget limit in USD. Set to a positive amount when component budgets are enabled; zero skips this budget.
+
+Conditions:
+  HasBackupAccount: !Not
+    - !Equals
+      - !Ref BackupAccountId
+      - ''
+  HasExistingSnsTopic: !Not
+    - !Equals
+      - !Ref ExistingSnsTopicArn
+      - ''
+  CreateAlertsTopic: !Equals
+    - !Ref ExistingSnsTopicArn
+    - ''
+  HasBillingView: !Not
+    - !Equals
+      - !Ref BillingViewArn
+      - ''
+  EnableComponentBudgets: !Equals
+    - !Ref CreateComponentBudgets
+    - 'true'
+  CreateComputeBudget: !And
+    - !Condition EnableComponentBudgets
+    - !Not
+      - !Equals
+        - !Ref ComputeMonthlyLimitUsd
+        - '0'
+  CreateStorageBudget: !And
+    - !Condition EnableComponentBudgets
+    - !Not
+      - !Equals
+        - !Ref StorageMonthlyLimitUsd
+        - '0'
+  CreateSnapshotsBudget: !And
+    - !Condition EnableComponentBudgets
+    - !Not
+      - !Equals
+        - !Ref SnapshotsMonthlyLimitUsd
+        - '0'
+  CreateNetworkBudget: !And
+    - !Condition EnableComponentBudgets
+    - !Not
+      - !Equals
+        - !Ref NetworkMonthlyLimitUsd
+        - '0'
+
+Resources:
+  AlertsTopic:
+    Type: AWS::SNS::Topic
+    Condition: CreateAlertsTopic
+    Properties:
+      TopicName: !Sub '${BudgetNamePrefix}-alerts'
+      Tags:
+        - Key: Application
+          Value: veeam-finops-guard
+
+  AlertsTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Condition: CreateAlertsTopic
+    Properties:
+      Topics:
+        - !Ref AlertsTopic
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowBudgetsToPublish
+            Effect: Allow
+            Principal:
+              Service: budgets.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref AlertsTopic
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
+  TotalByTagBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: !Sub '${BudgetNamePrefix}-total-by-tag'
+        BudgetLimit:
+          Amount: !Ref MonthlyLimitUsd
+          Unit: USD
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BillingViewArn: !If [HasBillingView, !Ref BillingViewArn, !Ref AWS::NoValue]
+        CostFilters:
+          TagKeyValue:
+            - !Sub 'user:${CostAllocationTagKey}$${CostAllocationTagValue}'
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: !Ref ForecastAlertPercent
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+            - SubscriptionType: SNS
+              Address: !If [HasExistingSnsTopic, !Ref ExistingSnsTopicArn, !Ref AlertsTopic]
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: !Ref ActualAlertPercentWarning
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+            - SubscriptionType: SNS
+              Address: !If [HasExistingSnsTopic, !Ref ExistingSnsTopicArn, !Ref AlertsTopic]
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: !Ref ActualAlertPercentCritical
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+            - SubscriptionType: SNS
+              Address: !If [HasExistingSnsTopic, !Ref ExistingSnsTopicArn, !Ref AlertsTopic]
+      ResourceTags:
+        - Key: Application
+          Value: veeam-finops-guard
+
+  BackupAccountBudget:
+    Type: AWS::Budgets::Budget
+    Condition: HasBackupAccount
+    Properties:
+      Budget:
+        BudgetName: !Sub '${BudgetNamePrefix}-backup-account'
+        BudgetLimit:
+          Amount: !Ref MonthlyLimitUsd
+          Unit: USD
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BillingViewArn: !If [HasBillingView, !Ref BillingViewArn, !Ref AWS::NoValue]
+        CostFilters:
+          LinkedAccount:
+            - !Ref BackupAccountId
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: !Ref ForecastAlertPercent
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+            - SubscriptionType: SNS
+              Address: !If [HasExistingSnsTopic, !Ref ExistingSnsTopicArn, !Ref AlertsTopic]
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: !Ref ActualAlertPercentWarning
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+            - SubscriptionType: SNS
+              Address: !If [HasExistingSnsTopic, !Ref ExistingSnsTopicArn, !Ref AlertsTopic]
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: !Ref ActualAlertPercentCritical
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+            - SubscriptionType: SNS
+              Address: !If [HasExistingSnsTopic, !Ref ExistingSnsTopicArn, !Ref AlertsTopic]
+      ResourceTags:
+        - Key: Application
+          Value: veeam-finops-guard
+
+  ComputeBudget:
+    Type: AWS::Budgets::Budget
+    Condition: CreateComputeBudget
+    Properties:
+      Budget:
+        BudgetName: !Sub '${BudgetNamePrefix}-compute'
+        BudgetLimit:
+          Amount: !Ref ComputeMonthlyLimitUsd
+          Unit: USD
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BillingViewArn: !If [HasBillingView, !Ref BillingViewArn, !Ref AWS::NoValue]
+        CostFilters:
+          Service:
+            - Amazon Elastic Compute Cloud - Compute
+          TagKeyValue:
+            - !Sub 'user:${CostAllocationTagKey}$${CostAllocationTagValue}'
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: !Ref ForecastAlertPercent
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+            - SubscriptionType: SNS
+              Address: !If [HasExistingSnsTopic, !Ref ExistingSnsTopicArn, !Ref AlertsTopic]
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: !Ref ActualAlertPercentWarning
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+            - SubscriptionType: SNS
+              Address: !If [HasExistingSnsTopic, !Ref ExistingSnsTopicArn, !Ref AlertsTopic]
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: !Ref ActualAlertPercentCritical
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+            - SubscriptionType: SNS
+              Address: !If [HasExistingSnsTopic, !Ref ExistingSnsTopicArn, !Ref AlertsTopic]
+      ResourceTags:
+        - Key: Application
+          Value: veeam-finops-guard
+
+  StorageBudget:
+    Type: AWS::Budgets::Budget
+    Condition: CreateStorageBudget
+    Properties:
+      Budget:
+        BudgetName: !Sub '${BudgetNamePrefix}-storage'
+        BudgetLimit:
+          Amount: !Ref StorageMonthlyLimitUsd
+          Unit: USD
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BillingViewArn: !If [HasBillingView, !Ref BillingViewArn, !Ref AWS::NoValue]
+        CostFilters:
+          Service:
+            - Amazon Simple Storage Service
+          TagKeyValue:
+            - !Sub 'user:${CostAllocationTagKey}$${CostAllocationTagValue}'
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: !Ref ForecastAlertPercent
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+            - SubscriptionType: SNS
+              Address: !If [HasExistingSnsTopic, !Ref ExistingSnsTopicArn, !Ref AlertsTopic]
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: !Ref ActualAlertPercentWarning
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+            - SubscriptionType: SNS
+              Address: !If [HasExistingSnsTopic, !Ref ExistingSnsTopicArn, !Ref AlertsTopic]
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: !Ref ActualAlertPercentCritical
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+            - SubscriptionType: SNS
+              Address: !If [HasExistingSnsTopic, !Ref ExistingSnsTopicArn, !Ref AlertsTopic]
+      ResourceTags:
+        - Key: Application
+          Value: veeam-finops-guard
+
+  SnapshotsBudget:
+    Type: AWS::Budgets::Budget
+    Condition: CreateSnapshotsBudget
+    Properties:
+      Budget:
+        BudgetName: !Sub '${BudgetNamePrefix}-snapshots'
+        BudgetLimit:
+          Amount: !Ref SnapshotsMonthlyLimitUsd
+          Unit: USD
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BillingViewArn: !If [HasBillingView, !Ref BillingViewArn, !Ref AWS::NoValue]
+        CostFilters:
+          Service:
+            - EC2-Other
+          UsageTypeGroup:
+            - 'EC2: EBS - Snapshots'
+          TagKeyValue:
+            - !Sub 'user:${CostAllocationTagKey}$${CostAllocationTagValue}'
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: !Ref ForecastAlertPercent
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+            - SubscriptionType: SNS
+              Address: !If [HasExistingSnsTopic, !Ref ExistingSnsTopicArn, !Ref AlertsTopic]
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: !Ref ActualAlertPercentWarning
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+            - SubscriptionType: SNS
+              Address: !If [HasExistingSnsTopic, !Ref ExistingSnsTopicArn, !Ref AlertsTopic]
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: !Ref ActualAlertPercentCritical
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+            - SubscriptionType: SNS
+              Address: !If [HasExistingSnsTopic, !Ref ExistingSnsTopicArn, !Ref AlertsTopic]
+      ResourceTags:
+        - Key: Application
+          Value: veeam-finops-guard
+
+  NetworkBudget:
+    Type: AWS::Budgets::Budget
+    Condition: CreateNetworkBudget
+    Properties:
+      Budget:
+        BudgetName: !Sub '${BudgetNamePrefix}-network'
+        BudgetLimit:
+          Amount: !Ref NetworkMonthlyLimitUsd
+          Unit: USD
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BillingViewArn: !If [HasBillingView, !Ref BillingViewArn, !Ref AWS::NoValue]
+        CostFilters:
+          Service:
+            - EC2-Other
+          UsageTypeGroup:
+            - 'EC2: Data Transfer'
+            - 'EC2: NAT Gateway'
+          TagKeyValue:
+            - !Sub 'user:${CostAllocationTagKey}$${CostAllocationTagValue}'
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: !Ref ForecastAlertPercent
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+            - SubscriptionType: SNS
+              Address: !If [HasExistingSnsTopic, !Ref ExistingSnsTopicArn, !Ref AlertsTopic]
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: !Ref ActualAlertPercentWarning
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+            - SubscriptionType: SNS
+              Address: !If [HasExistingSnsTopic, !Ref ExistingSnsTopicArn, !Ref AlertsTopic]
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: !Ref ActualAlertPercentCritical
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+            - SubscriptionType: SNS
+              Address: !If [HasExistingSnsTopic, !Ref ExistingSnsTopicArn, !Ref AlertsTopic]
+      ResourceTags:
+        - Key: Application
+          Value: veeam-finops-guard
+
+Outputs:
+  TotalByTagBudgetName:
+    Description: Name of the always-created total-by-tag budget.
+    Value: !Sub '${BudgetNamePrefix}-total-by-tag'
+  BackupAccountBudgetName:
+    Condition: HasBackupAccount
+    Description: Name of the backup-account budget, when BackupAccountId is set.
+    Value: !Sub '${BudgetNamePrefix}-backup-account'
+  ComputeBudgetName:
+    Condition: CreateComputeBudget
+    Description: Name of the Compute component budget, when created.
+    Value: !Sub '${BudgetNamePrefix}-compute'
+  StorageBudgetName:
+    Condition: CreateStorageBudget
+    Description: Name of the Storage component budget, when created.
+    Value: !Sub '${BudgetNamePrefix}-storage'
+  SnapshotsBudgetName:
+    Condition: CreateSnapshotsBudget
+    Description: Name of the Snapshots component budget, when created.
+    Value: !Sub '${BudgetNamePrefix}-snapshots'
+  NetworkBudgetName:
+    Condition: CreateNetworkBudget
+    Description: Name of the Network component budget, when created.
+    Value: !Sub '${BudgetNamePrefix}-network'
+  AlertsTopicArn:
+    Description: ARN of the SNS topic used for notifications (provided or created by this stack).
+    Value: !If [HasExistingSnsTopic, !Ref ExistingSnsTopicArn, !Ref AlertsTopic]
